@@ -380,11 +380,13 @@ static bool release_combo_key(int32_t position, int64_t timestamp) {
                 (!active_combo->combo->slow_release && all_keys_pressed)) {
                 release_combo_behavior(active_combo->combo, timestamp);
             }
-            if (all_keys_pressed) {
-                press_partial_behavior(active_combo->combo, timestamp);
+            if (position != active_combo->combo->key_positions[0]) {
+                if (all_keys_pressed)
+                    press_partial_behavior(active_combo->combo, timestamp);
+                if (all_keys_released)
+                    release_partial_behavior(active_combo->combo, timestamp);
             }
             if (all_keys_released) {
-                release_partial_behavior(active_combo->combo, timestamp);
                 deactivate_combo(combo_idx);
             }
             return true;

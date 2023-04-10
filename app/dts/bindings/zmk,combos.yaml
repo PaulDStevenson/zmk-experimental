@@ -18,7 +18,7 @@ child-binding:
     partial-holds:
       type: array
       required: false
-      default: [-1]
+      default: []
     timeout-ms:
       type: int
       default: 50

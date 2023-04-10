@@ -11,3 +11,7 @@ properties:
   usage-pages:
     type: array
     required: true
+  ignore-keycodes:
+    type: array
+    required: false
+    default: []

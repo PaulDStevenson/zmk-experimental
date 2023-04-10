@@ -19,9 +19,14 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 #if DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
 
+#define ZMK_BHV_KEY_REPEAT_MAX_IGNORES 10
+
 struct behavior_key_repeat_config {
     uint8_t index;
+    uint16_t ignore_keycodes_count;
+    uint32_t ignore_keycodes[ZMK_BHV_KEY_REPEAT_MAX_IGNORES];
     uint8_t usage_pages_count;
+    // does it make more sense for ignore keycodes be variable length and usage pages be fixed?
     uint16_t usage_pages[];
 };
 
@@ -91,11 +96,23 @@ static int key_repeat_keycode_state_changed_listener(const zmk_event_t *eh) {
         struct behavior_key_repeat_data *data = dev->data;
         const struct behavior_key_repeat_config *config = dev->config;
 
-        for (int u = 0; u < config->usage_pages_count; u++) {
-            if (config->usage_pages[u] == ev->usage_page) {
-                memcpy(&data->last_keycode_pressed, ev, sizeof(struct zmk_keycode_state_changed));
-                data->last_keycode_pressed.implicit_modifiers |= zmk_hid_get_explicit_mods();
+        bool is_ignored_keycode = false;
+        for (int u = 0; u < config->ignore_keycodes_count; u++) {
+            LOG_DBG("checking ignored keycode %X with pressed keycode %X",
+                    config->ignore_keycodes[u], ev->keycode);
+            if (config->ignore_keycodes[u] == ZMK_HID_USAGE(ev->usage_page, ev->keycode)) {
+                is_ignored_keycode = true;
                 break;
+            }
+        }
+        if (!is_ignored_keycode) {
+            for (int u = 0; u < config->usage_pages_count; u++) {
+                if (config->usage_pages[u] == ev->usage_page) {
+                    memcpy(&data->last_keycode_pressed, ev,
+                           sizeof(struct zmk_keycode_state_changed));
+                    data->last_keycode_pressed.implicit_modifiers |= zmk_hid_get_explicit_mods();
+                    break;
+                }
             }
         }
     }
@@ -113,6 +130,8 @@ static int behavior_key_repeat_init(const struct device *dev) {
     static struct behavior_key_repeat_data behavior_key_repeat_data_##n = {};                      \
     static struct behavior_key_repeat_config behavior_key_repeat_config_##n = {                    \
         .index = n,                                                                                \
+        .ignore_keycodes = DT_INST_PROP(n, ignore_keycodes),                                       \
+        .ignore_keycodes_count = DT_INST_PROP_LEN(n, ignore_keycodes),                             \
         .usage_pages = DT_INST_PROP(n, usage_pages),                                               \
         .usage_pages_count = DT_INST_PROP_LEN(n, usage_pages),                                     \
     };                                                                                             \

@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include <device.h>
+#include <zephyr/device.h>
 #include <drivers/behavior.h>
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 #include <zmk/behavior.h>
 #include <zmk/behavior_queue.h>
 #include <zmk/keymap.h>

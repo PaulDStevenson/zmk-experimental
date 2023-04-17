@@ -98,21 +98,20 @@ static int key_repeat_keycode_state_changed_listener(const zmk_event_t *eh) {
 
         bool is_ignored_keycode = false;
         for (int u = 0; u < config->ignore_keycodes_count; u++) {
-            LOG_DBG("checking ignored keycode %X with pressed keycode %X",
-                    config->ignore_keycodes[u], ev->keycode);
             if (config->ignore_keycodes[u] == ZMK_HID_USAGE(ev->usage_page, ev->keycode)) {
                 is_ignored_keycode = true;
                 break;
             }
         }
-        if (!is_ignored_keycode) {
-            for (int u = 0; u < config->usage_pages_count; u++) {
-                if (config->usage_pages[u] == ev->usage_page) {
-                    memcpy(&data->last_keycode_pressed, ev,
-                           sizeof(struct zmk_keycode_state_changed));
-                    data->last_keycode_pressed.implicit_modifiers |= zmk_hid_get_explicit_mods();
-                    break;
-                }
+        if (is_ignored_keycode) {
+            continue;
+        }
+
+        for (int u = 0; u < config->usage_pages_count; u++) {
+            if (config->usage_pages[u] == ev->usage_page) {
+                memcpy(&data->last_keycode_pressed, ev, sizeof(struct zmk_keycode_state_changed));
+                data->last_keycode_pressed.implicit_modifiers |= zmk_hid_get_explicit_mods();
+                break;
             }
         }
     }

@@ -28,14 +28,16 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 struct combo_cfg {
     int32_t key_positions[CONFIG_ZMK_COMBO_MAX_KEYS_PER_COMBO];
     int32_t key_position_len;
-    int32_t partial_holds[CONFIG_ZMK_COMBO_MAX_KEYS_PER_COMBO];
-    int32_t partial_holds_len;
     struct zmk_behavior_binding behavior;
     int32_t timeout_ms;
     int32_t global_quick_tap_ms;
     // if slow release is set, the combo releases when the last key is released.
     // otherwise, the combo releases when the first key is released.
     bool slow_release;
+    int32_t slow_release_positions[CONFIG_ZMK_COMBO_MAX_KEYS_PER_COMBO];
+    int32_t slow_release_positions_len;
+    int32_t partial_hold_positions[CONFIG_ZMK_COMBO_MAX_KEYS_PER_COMBO];
+    int32_t partial_hold_positions_len;
     // the virtual key position is a key position outside the range used by the keyboard.
     // it is necessary so hold-taps can uniquely identify a behavior.
     int32_t virtual_key_position;
@@ -49,6 +51,8 @@ struct active_combo {
     // The keys are removed from this array when they are released.
     // Once this array is empty, the behavior is released.
     const zmk_event_t *key_positions_pressed[CONFIG_ZMK_COMBO_MAX_KEYS_PER_COMBO];
+    // keep track if the behavior has already been released (used for slow release)
+    bool behavior_released;
 };
 
 struct combo_candidate {
@@ -334,6 +338,7 @@ static struct active_combo *store_active_combo(struct combo_cfg *combo) {
     for (int i = 0; i < CONFIG_ZMK_COMBO_MAX_PRESSED_COMBOS; i++) {
         if (active_combos[i].combo == NULL) {
             active_combos[i].combo = combo;
+            active_combos[i].behavior_released = false;
             active_combo_count++;
             return &active_combos[i];
         }
@@ -388,25 +393,47 @@ static bool release_combo_key(int32_t position, int64_t timestamp, const zmk_eve
         }
 
         if (key_released) {
-            if ((active_combo->combo->slow_release && all_keys_released) ||
-                (!active_combo->combo->slow_release && all_keys_pressed)) {
+            // slow release
+            if (!active_combo->combo->slow_release && all_keys_pressed) {
+                // if slow release is not enabled, release the behavior
                 release_combo_behavior(active_combo->combo, timestamp);
+            } else if (active_combo->combo->slow_release && !active_combo->behavior_released) {
+                // if slow release is enabled and the behavior has not yet been released
+                if (all_keys_released) {
+                    // if all keys are released, release the behavior
+                    release_combo_behavior(active_combo->combo, timestamp);
+                    active_combo->behavior_released = true;
+                } else {
+                    // if the key being released is a slow release key, release the behavior,
+                    // otherwise ignore
+                    for (int i = 0; i < active_combo->combo->slow_release_positions_len; i++) {
+                        if (active_combo->combo->slow_release_positions[i] == position) {
+                            release_combo_behavior(active_combo->combo, timestamp);
+                            active_combo->behavior_released = true;
+                        }
+                    }
+                }
             }
+
+            // partial holds
             if (all_keys_pressed) {
-                for (int i = 0; i < active_combo->combo->partial_holds_len; i++) {
-                    int32_t partial_hold_position = active_combo->combo->partial_holds[i];
+                // if all keys are pressed, press all other partial hold keys
+                for (int i = 0; i < active_combo->combo->partial_hold_positions_len; i++) {
+                    int32_t partial_hold_position = active_combo->combo->partial_hold_positions[i];
                     if (partial_hold_position != position) {
                         process_partial_hold(partial_hold_position, timestamp, true, ev);
                     }
                 }
             } else {
-                for (int i = 0; i < active_combo->combo->partial_holds_len; i++) {
-                    int32_t partial_hold_position = active_combo->combo->partial_holds[i];
+                // release any partial hold keys that were released
+                for (int i = 0; i < active_combo->combo->partial_hold_positions_len; i++) {
+                    int32_t partial_hold_position = active_combo->combo->partial_hold_positions[i];
                     if (partial_hold_position == position) {
                         process_partial_hold(partial_hold_position, timestamp, false, ev);
                     }
                 }
             }
+
             if (all_keys_released) {
                 deactivate_combo(combo_idx);
             }
@@ -540,11 +567,13 @@ ZMK_SUBSCRIPTION(combo, zmk_keycode_state_changed);
         .global_quick_tap_ms = DT_PROP(n, global_quick_tap_ms),                                    \
         .key_positions = DT_PROP(n, key_positions),                                                \
         .key_position_len = DT_PROP_LEN(n, key_positions),                                         \
-        .partial_holds = DT_PROP(n, partial_holds),                                                \
-        .partial_holds_len = DT_PROP_LEN(n, partial_holds),                                        \
         .behavior = ZMK_KEYMAP_EXTRACT_BINDING(0, n),                                              \
         .virtual_key_position = ZMK_KEYMAP_LEN + __COUNTER__,                                      \
         .slow_release = DT_PROP(n, slow_release),                                                  \
+        .slow_release_positions = DT_PROP(n, slow_release_positions),                              \
+        .slow_release_positions_len = DT_PROP_LEN(n, slow_release_positions),                      \
+        .partial_hold_positions = DT_PROP(n, partial_hold_positions),                              \
+        .partial_hold_positions_len = DT_PROP_LEN(n, partial_hold_positions),                      \
         .layers = DT_PROP(n, layers),                                                              \
         .layers_len = DT_PROP_LEN(n, layers),                                                      \
     };

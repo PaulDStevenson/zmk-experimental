@@ -28,7 +28,10 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 struct combo_cfg {
     int32_t key_positions[CONFIG_ZMK_COMBO_MAX_KEYS_PER_COMBO];
     int32_t key_position_len;
-    struct zmk_behavior_binding behavior;
+    // there will always be one behavior, and up to MAX_KEYS_PER_COMBO positions, plus behaviors for
+    // those positions
+    struct zmk_behavior_binding behaviors[1 + CONFIG_ZMK_COMBO_MAX_KEYS_PER_COMBO * 2];
+    int32_t behaviors_len;
     int32_t timeout_ms;
     int32_t global_quick_tap_ms;
     // if slow release is set, the combo releases when the last key is released.
@@ -36,8 +39,6 @@ struct combo_cfg {
     bool slow_release;
     int32_t slow_release_positions[CONFIG_ZMK_COMBO_MAX_KEYS_PER_COMBO];
     int32_t slow_release_positions_len;
-    int32_t partial_hold_positions[CONFIG_ZMK_COMBO_MAX_KEYS_PER_COMBO];
-    int32_t partial_hold_positions_len;
     // the virtual key position is a key position outside the range used by the keyboard.
     // it is necessary so hold-taps can uniquely identify a behavior.
     int32_t virtual_key_position;
@@ -288,34 +289,43 @@ static int release_pressed_keys() {
     return CONFIG_ZMK_COMBO_MAX_KEYS_PER_COMBO;
 }
 
-static inline int press_combo_behavior(struct combo_cfg *combo, int32_t timestamp) {
+static inline int process_combo_behavior(struct combo_cfg *combo, int32_t timestamp, bool pressed) {
     struct zmk_behavior_binding_event event = {
         .position = combo->virtual_key_position,
         .timestamp = timestamp,
     };
 
-    last_combo_timestamp = timestamp;
-
-    return behavior_keymap_binding_pressed(&combo->behavior, event);
+    if (pressed) {
+        last_combo_timestamp = timestamp;
+        return behavior_keymap_binding_pressed(&combo->behaviors[0], event);
+    } else {
+        return behavior_keymap_binding_released(&combo->behaviors[0], event);
+    }
 }
 
-static inline int release_combo_behavior(struct combo_cfg *combo, int32_t timestamp) {
-    struct zmk_behavior_binding_event event = {
-        .position = combo->virtual_key_position,
-        .timestamp = timestamp,
-    };
-
-    return behavior_keymap_binding_released(&combo->behavior, event);
-}
-
-static inline int process_partial_hold(int32_t position, int32_t timestamp, bool pressed,
-                                       const zmk_event_t *ev) {
+static inline int process_partial_hold_position(int32_t position, int32_t timestamp,
+                                                const zmk_event_t *ev, bool pressed) {
     // This function may be incorrect, but it works. I want to convert a position to a behavior
     const struct zmk_position_state_changed *pos_ev;
     if ((pos_ev = as_zmk_position_state_changed(ev)) != NULL) {
         return zmk_keymap_position_state_changed(pos_ev->source, position, pressed, timestamp);
     }
     return -ENOTSUP;
+}
+
+static inline int process_partial_hold_behavior(int32_t position, int32_t timestamp,
+                                                struct zmk_behavior_binding *behavior,
+                                                bool pressed) {
+    struct zmk_behavior_binding_event event = {
+        .position = position,
+        .timestamp = timestamp,
+    };
+
+    if (pressed) {
+        return behavior_keymap_binding_pressed(behavior, event);
+    } else {
+        return behavior_keymap_binding_released(behavior, event);
+    }
 }
 
 static void move_pressed_keys_to_active_combo(struct active_combo *active_combo) {
@@ -357,8 +367,9 @@ static void activate_combo(struct combo_cfg *combo) {
         return;
     }
     move_pressed_keys_to_active_combo(active_combo);
-    press_combo_behavior(
-        combo, as_zmk_position_state_changed(active_combo->key_positions_pressed[0])->timestamp);
+    process_combo_behavior(
+        combo, as_zmk_position_state_changed(active_combo->key_positions_pressed[0])->timestamp,
+        true);
 }
 
 static void deactivate_combo(int active_combo_index) {
@@ -370,6 +381,10 @@ static void deactivate_combo(int active_combo_index) {
     active_combos[active_combo_count].combo = NULL;
     active_combos[active_combo_count] = (struct active_combo){0};
 }
+
+#define ZM_IS_NODE_MATCH(a, b) (strcmp(a, b) == 0)
+#define PARTIAL_HOLD_POSITION DT_PROP(DT_INST(0, zmk_combo_partial_hold_position), label)
+#define IS_PARTIAL_HOLD_POSITION(dev) ZM_IS_NODE_MATCH(dev, PARTIAL_HOLD_POSITION)
 
 /* returns true if a key was released. */
 static bool release_combo_key(int32_t position, int64_t timestamp, const zmk_event_t *ev) {
@@ -396,19 +411,19 @@ static bool release_combo_key(int32_t position, int64_t timestamp, const zmk_eve
             // slow release
             if (!active_combo->combo->slow_release && all_keys_pressed) {
                 // if slow release is not enabled, release the behavior
-                release_combo_behavior(active_combo->combo, timestamp);
+                process_combo_behavior(active_combo->combo, timestamp, false);
             } else if (active_combo->combo->slow_release && !active_combo->behavior_released) {
                 // if slow release is enabled and the behavior has not yet been released
                 if (all_keys_released) {
                     // if all keys are released, release the behavior
-                    release_combo_behavior(active_combo->combo, timestamp);
+                    process_combo_behavior(active_combo->combo, timestamp, false);
                     active_combo->behavior_released = true;
                 } else {
                     // if the key being released is a slow release key, release the behavior,
                     // otherwise ignore
                     for (int i = 0; i < active_combo->combo->slow_release_positions_len; i++) {
                         if (active_combo->combo->slow_release_positions[i] == position) {
-                            release_combo_behavior(active_combo->combo, timestamp);
+                            process_combo_behavior(active_combo->combo, timestamp, false);
                             active_combo->behavior_released = true;
                         }
                     }
@@ -416,20 +431,47 @@ static bool release_combo_key(int32_t position, int64_t timestamp, const zmk_eve
             }
 
             // partial holds
-            if (all_keys_pressed) {
-                // if all keys are pressed, press all other partial hold keys
-                for (int i = 0; i < active_combo->combo->partial_hold_positions_len; i++) {
-                    int32_t partial_hold_position = active_combo->combo->partial_hold_positions[i];
-                    if (partial_hold_position != position) {
-                        process_partial_hold(partial_hold_position, timestamp, true, ev);
-                    }
+            for (int i = 1; i < active_combo->combo->behaviors_len; i++) {
+                // loop through every behavior except the first. If the behavior is a partial hold
+                // position, process it. If the next behavior is also a behavior, press that
+                // behavior instead of the partial hold position.
+                struct zmk_behavior_binding *binding = &active_combo->combo->behaviors[i];
+                // if the behavior is not a partial hold position, skip it
+                if (IS_PARTIAL_HOLD_POSITION(binding->behavior_dev)) {
+                    continue;
                 }
-            } else {
-                // release any partial hold keys that were released
-                for (int i = 0; i < active_combo->combo->partial_hold_positions_len; i++) {
-                    int32_t partial_hold_position = active_combo->combo->partial_hold_positions[i];
+                int32_t partial_hold_position = binding->param1;
+                // if the next behavior is a behavior (not a partial hold position)
+                bool has_explicit_behavior =
+                    i == active_combo->combo->behaviors_len - 1
+                        ? false
+                        : !IS_PARTIAL_HOLD_POSITION(
+                              active_combo->combo->behaviors[i + 1].behavior_dev);
+
+                // if all keys are pressed, press all other partial hold keys that are still held
+                if (all_keys_pressed) {
+                    // except the one that was released
+                    if (partial_hold_position != position) {
+                        // either press the position, or press the behavior
+                        if (has_explicit_behavior) {
+                            process_partial_hold_behavior(
+                                position, timestamp, &active_combo->combo->behaviors[i + 1], true);
+                        } else {
+                            process_partial_hold_position(partial_hold_position, timestamp, ev,
+                                                          true);
+                        }
+                    }
+                } else {
+                    // now release any partial hold keys that are released
                     if (partial_hold_position == position) {
-                        process_partial_hold(partial_hold_position, timestamp, false, ev);
+                        // either release the position, or release the behavior
+                        if (has_explicit_behavior) {
+                            process_partial_hold_behavior(
+                                position, timestamp, &active_combo->combo->behaviors[i + 1], false);
+                        } else {
+                            process_partial_hold_position(partial_hold_position, timestamp, ev,
+                                                          false);
+                        }
                     }
                 }
             }
@@ -561,19 +603,23 @@ ZMK_LISTENER(combo, behavior_combo_listener);
 ZMK_SUBSCRIPTION(combo, zmk_position_state_changed);
 ZMK_SUBSCRIPTION(combo, zmk_keycode_state_changed);
 
+#define BINDING_WITH_COMMA(idx, drv_inst) ZMK_KEYMAP_EXTRACT_BINDING(idx, drv_inst)
+
+#define TRANSFORMED_BEHAVIORS(n)                                                                   \
+    { LISTIFY(DT_PROP_LEN(n, bindings), BINDING_WITH_COMMA, (, ), n) }
+
 #define COMBO_INST(n)                                                                              \
     static struct combo_cfg combo_config_##n = {                                                   \
         .timeout_ms = DT_PROP(n, timeout_ms),                                                      \
         .global_quick_tap_ms = DT_PROP(n, global_quick_tap_ms),                                    \
         .key_positions = DT_PROP(n, key_positions),                                                \
         .key_position_len = DT_PROP_LEN(n, key_positions),                                         \
-        .behavior = ZMK_KEYMAP_EXTRACT_BINDING(0, n),                                              \
+        .behaviors = TRANSFORMED_BEHAVIORS(n),                                                     \
+        .behaviors_len = DT_PROP_LEN(n, bindings),                                                 \
         .virtual_key_position = ZMK_KEYMAP_LEN + __COUNTER__,                                      \
         .slow_release = DT_PROP(n, slow_release),                                                  \
         .slow_release_positions = DT_PROP(n, slow_release_positions),                              \
         .slow_release_positions_len = DT_PROP_LEN(n, slow_release_positions),                      \
-        .partial_hold_positions = DT_PROP(n, partial_hold_positions),                              \
-        .partial_hold_positions_len = DT_PROP_LEN(n, partial_hold_positions),                      \
         .layers = DT_PROP(n, layers),                                                              \
         .layers_len = DT_PROP_LEN(n, layers),                                                      \
     };

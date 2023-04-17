@@ -24,10 +24,6 @@ child-binding:
       type: array
       required: false
       default: []
-    partial-hold-positions:
-      type: array
-      required: false
-      default: []
     layers:
       type: array
       default: [-1]

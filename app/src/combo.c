@@ -28,22 +28,21 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 struct combo_cfg {
     int32_t key_positions[CONFIG_ZMK_COMBO_MAX_KEYS_PER_COMBO];
     int32_t key_position_len;
-    // there will always be one behavior, and up to MAX_KEYS_PER_COMBO positions, plus behaviors for
-    // those positions
-    struct zmk_behavior_binding behaviors[1 + CONFIG_ZMK_COMBO_MAX_KEYS_PER_COMBO * 2];
-    int32_t behaviors_len;
     int32_t timeout_ms;
     int32_t global_quick_tap_ms;
-    // if slow release is set, the combo releases when the last key is released.
-    // otherwise, the combo releases when the first key is released.
+    // if slow release is set, the combo releases when the last key in slow_release_positions is
+    // released or all keys are released. otherwise, the combo releases when the first key is
+    // released.
     bool slow_release;
     int32_t slow_release_positions[CONFIG_ZMK_COMBO_MAX_KEYS_PER_COMBO];
     int32_t slow_release_positions_len;
+    int8_t layers[CONFIG_ZMK_COMBO_MAX_LAYERS_PER_COMBO];
+    int32_t layers_len;
     // the virtual key position is a key position outside the range used by the keyboard.
     // it is necessary so hold-taps can uniquely identify a behavior.
     int32_t virtual_key_position;
-    int32_t layers_len;
-    int8_t layers[];
+    int32_t behaviors_len;
+    struct zmk_behavior_binding behaviors[];
 };
 
 struct active_combo {
@@ -437,7 +436,7 @@ static bool release_combo_key(int32_t position, int64_t timestamp, const zmk_eve
                 // behavior instead of the partial hold position.
                 struct zmk_behavior_binding *binding = &active_combo->combo->behaviors[i];
                 // if the behavior is not a partial hold position, skip it
-                if (IS_PARTIAL_HOLD_POSITION(binding->behavior_dev)) {
+                if (!IS_PARTIAL_HOLD_POSITION(binding->behavior_dev)) {
                     continue;
                 }
                 int32_t partial_hold_position = binding->param1;
@@ -614,14 +613,14 @@ ZMK_SUBSCRIPTION(combo, zmk_keycode_state_changed);
         .global_quick_tap_ms = DT_PROP(n, global_quick_tap_ms),                                    \
         .key_positions = DT_PROP(n, key_positions),                                                \
         .key_position_len = DT_PROP_LEN(n, key_positions),                                         \
-        .behaviors = TRANSFORMED_BEHAVIORS(n),                                                     \
-        .behaviors_len = DT_PROP_LEN(n, bindings),                                                 \
-        .virtual_key_position = ZMK_KEYMAP_LEN + __COUNTER__,                                      \
         .slow_release = DT_PROP(n, slow_release),                                                  \
         .slow_release_positions = DT_PROP(n, slow_release_positions),                              \
         .slow_release_positions_len = DT_PROP_LEN(n, slow_release_positions),                      \
         .layers = DT_PROP(n, layers),                                                              \
         .layers_len = DT_PROP_LEN(n, layers),                                                      \
+        .virtual_key_position = ZMK_KEYMAP_LEN + __COUNTER__,                                      \
+        .behaviors = TRANSFORMED_BEHAVIORS(n),                                                     \
+        .behaviors_len = DT_PROP_LEN(n, bindings),                                                 \
     };
 
 #define INITIALIZE_COMBO(n) initialize_combo(&combo_config_##n);

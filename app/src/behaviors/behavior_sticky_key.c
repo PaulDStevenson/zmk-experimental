@@ -144,6 +144,8 @@ static int on_sticky_key_binding_pressed(struct zmk_behavior_binding *binding,
         return ZMK_BEHAVIOR_OPAQUE;
     }
 
+    sticky_key->timer_started = true;
+    sticky_key->release_at = event.timestamp + sticky_key->config->release_after_ms;
     press_sticky_key_behavior(sticky_key, event.timestamp);
     LOG_DBG("%d new sticky_key", event.position);
     return ZMK_BEHAVIOR_OPAQUE;
@@ -162,13 +164,12 @@ static int on_sticky_key_binding_released(struct zmk_behavior_binding *binding,
         return release_sticky_key_behavior(sticky_key, event.timestamp);
     }
 
-    // No other key was pressed. Start the timer.
-    sticky_key->timer_started = true;
-    sticky_key->release_at = event.timestamp + sticky_key->config->release_after_ms;
     // adjust timer in case this behavior was queued by a hold-tap
     int32_t ms_left = sticky_key->release_at - k_uptime_get();
     if (ms_left > 0) {
-        k_work_schedule(&sticky_key->release_timer, K_MSEC(ms_left));
+        k_work_reschedule(&sticky_key->release_timer, K_MSEC(ms_left));
+    } else {
+        release_sticky_key_behavior(sticky_key, sticky_key->release_at);
     }
     return ZMK_BEHAVIOR_OPAQUE;
 }
